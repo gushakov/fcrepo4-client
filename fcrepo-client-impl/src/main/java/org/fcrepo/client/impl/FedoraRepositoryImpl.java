@@ -16,7 +16,6 @@
 package org.fcrepo.client.impl;
 
 import com.hp.hpl.jena.graph.Triple;
-
 import org.apache.http.HttpResponse;
 import org.apache.http.StatusLine;
 import org.apache.http.client.HttpClient;
@@ -33,6 +32,7 @@ import org.fcrepo.client.ForbiddenException;
 import org.fcrepo.client.NotFoundException;
 import org.fcrepo.client.ReadOnlyException;
 import org.fcrepo.client.utils.HttpHelper;
+import org.fcrepo.client.utils.TransactionIdHolder;
 import org.slf4j.Logger;
 
 import java.io.InputStream;
@@ -43,6 +43,7 @@ import static org.apache.http.HttpStatus.SC_CONFLICT;
 import static org.apache.http.HttpStatus.SC_CREATED;
 import static org.apache.http.HttpStatus.SC_FORBIDDEN;
 import static org.apache.http.HttpStatus.SC_NOT_FOUND;
+import static org.apache.http.HttpStatus.SC_NO_CONTENT;
 import static org.apache.http.HttpStatus.SC_OK;
 import static org.slf4j.LoggerFactory.getLogger;
 
@@ -51,10 +52,16 @@ import static org.slf4j.LoggerFactory.getLogger;
  *
  * @author lsitu
  * @author escowles
+ * @author gushakov
  * @since 2014-08-11
  */
 public class FedoraRepositoryImpl implements FedoraRepository {
     private static final Logger LOGGER = getLogger(FedoraRepositoryImpl.class);
+
+    private static final String TX = "tx:";
+    private static final String FCR_TX = "/fcr:tx";
+    private static final String FCR_COMMIT = "/fcr:commit";
+    private static final String FCR_ROLLBACK = "/fcr:rollback";
 
     protected HttpHelper httpHelper;
     protected String repositoryURL;
@@ -76,8 +83,8 @@ public class FedoraRepositoryImpl implements FedoraRepository {
      * Constructor
      *
      * @param repositoryURL Repository base URL
-     * @param username Repository username
-     * @param password Repository password
+     * @param username      Repository username
+     * @param password      Repository password
      */
     public FedoraRepositoryImpl(final String repositoryURL, final String username, final String password) {
         this.repositoryURL = repositoryURL;
@@ -88,7 +95,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
      * Constructor that takes the pre-configured HttpClient
      *
      * @param repositoryURL Repository baseURL
-     * @param httpClient Pre-configured httpClient
+     * @param httpClient    Pre-configured httpClient
      */
     public FedoraRepositoryImpl(final String repositoryURL, final HttpClient httpClient) {
         this.repositoryURL = repositoryURL;
@@ -97,7 +104,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
 
     @Override
     public boolean exists(final String path) throws FedoraException, ForbiddenException {
-        final HttpHead head = httpHelper.createHeadMethod(path);
+        final HttpHead head = httpHelper.createHeadMethod(prependTransactionId(path));
         try {
             final HttpResponse response = httpHelper.execute(head);
             final StatusLine status = response.getStatusLine();
@@ -113,7 +120,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
             } else {
                 LOGGER.error("error checking resource {}: {} {}", uri, statusCode, status.getReasonPhrase());
                 throw new FedoraException("error checking resource " + uri + ": " + statusCode + " " +
-                                          status.getReasonPhrase());
+                        status.getReasonPhrase());
             }
         } catch (final Exception e) {
             LOGGER.error("could not encode URI parameter", e);
@@ -125,17 +132,19 @@ public class FedoraRepositoryImpl implements FedoraRepository {
 
     @Override
     public FedoraDatastream getDatastream(final String path) throws FedoraException {
-        return (FedoraDatastream)httpHelper.loadProperties(new FedoraDatastreamImpl(this, httpHelper, path));
+        return (FedoraDatastream) httpHelper
+                .loadProperties(new FedoraDatastreamImpl(this, httpHelper, prependTransactionId(path)));
     }
 
     @Override
     public FedoraObject getObject(final String path) throws FedoraException {
-        return (FedoraObject)httpHelper.loadProperties(new FedoraObjectImpl(this, httpHelper, path));
+        return (FedoraObject) httpHelper
+                .loadProperties(new FedoraObjectImpl(this, httpHelper, prependTransactionId(path)));
     }
 
     @Override
     public FedoraDatastream createDatastream(final String path, final FedoraContent content) throws FedoraException {
-        final HttpPut put = httpHelper.createContentPutMethod(path, null, content);
+        final HttpPut put = httpHelper.createContentPutMethod(prependTransactionId(path), null, content);
         try {
             final HttpResponse response = httpHelper.execute(put);
             final String uri = put.getURI().toString();
@@ -143,7 +152,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
             final int statusCode = status.getStatusCode();
 
             if (statusCode == SC_CREATED) {
-                return getDatastream(path);
+                return getDatastream(prependTransactionId(path));
             } else if (statusCode == SC_FORBIDDEN) {
                 LOGGER.error("request to create resource {} is not authorized.", uri);
                 throw new ForbiddenException("request to create resource " + uri + " is not authorized.");
@@ -153,7 +162,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
             } else {
                 LOGGER.error("error creating resource {}: {} {}", uri, statusCode, status.getReasonPhrase());
                 throw new FedoraException("error retrieving resource " + uri + ": " + statusCode + " " +
-                                                  status.getReasonPhrase());
+                        status.getReasonPhrase());
             }
         } catch (final Exception e) {
             LOGGER.error("could not encode URI parameter", e);
@@ -166,7 +175,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
     @Override
     public FedoraDatastream createOrUpdateRedirectDatastream(final String path, final String url)
             throws FedoraException {
-        final HttpPut put = httpHelper.createContentPutMethod(path, null, null);
+        final HttpPut put = httpHelper.createContentPutMethod(prependTransactionId(path), null, null);
         try {
             put.setHeader("Content-Type", "message/external-body; access-type=URL; URL=\"" + url + "\"");
             final HttpResponse response = httpHelper.execute(put);
@@ -175,7 +184,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
             final int statusCode = status.getStatusCode();
 
             if (statusCode == SC_CREATED) {
-                return getDatastream(path);
+                return getDatastream(prependTransactionId(path));
             } else if (statusCode == SC_FORBIDDEN) {
                 LOGGER.error("request to create resource {} is not authorized.", uri);
                 throw new ForbiddenException("request to create resource " + uri + " is not authorized.");
@@ -194,7 +203,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
 
     @Override
     public FedoraObject createObject(final String path) throws FedoraException {
-        final HttpPut put = httpHelper.createPutMethod(path, null);
+        final HttpPut put = httpHelper.createPutMethod(prependTransactionId(path), null);
         try {
             final HttpResponse response = httpHelper.execute(put);
             final String uri = put.getURI().toString();
@@ -202,7 +211,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
             final int statusCode = status.getStatusCode();
 
             if (statusCode == SC_CREATED) {
-                return getObject(path);
+                return getObject(prependTransactionId(path));
             } else if (statusCode == SC_FORBIDDEN) {
                 LOGGER.error("request to create resource {} is not authorized.", uri);
                 throw new ForbiddenException("request to create resource " + uri + " is not authorized.");
@@ -212,7 +221,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
             } else {
                 LOGGER.error("error creating resource {}: {} {}", uri, statusCode, status.getReasonPhrase());
                 throw new FedoraException("error retrieving resource " + uri + ": " + statusCode + " " +
-                                                  status.getReasonPhrase());
+                        status.getReasonPhrase());
             }
         } catch (final Exception e) {
             LOGGER.error("could not encode URI parameter", e);
@@ -224,7 +233,8 @@ public class FedoraRepositoryImpl implements FedoraRepository {
 
     @Override
     public FedoraObject createResource(final String containerPath) throws FedoraException {
-        final HttpPost post = httpHelper.createPostMethod(containerPath == null ? "" : containerPath, null);
+        final HttpPost post = httpHelper
+                .createPostMethod(containerPath == null ? "" : prependTransactionId(containerPath), null);
         try {
             final HttpResponse response = httpHelper.execute(post);
             final String uri = post.getURI().toString();
@@ -252,18 +262,18 @@ public class FedoraRepositoryImpl implements FedoraRepository {
     @Override
     public FedoraDatastream findOrCreateDatastream(final String path) throws FedoraException {
         try {
-            return getDatastream(path);
-        } catch ( NotFoundException ex ) {
-            return createDatastream(path, null);
+            return getDatastream(prependTransactionId(path));
+        } catch (NotFoundException ex) {
+            return createDatastream(prependTransactionId(path), null);
         }
     }
 
     @Override
     public FedoraObject findOrCreateObject(final String path) throws FedoraException {
         try {
-            return getObject(path);
-        } catch ( NotFoundException ex ) {
-            return createObject(path);
+            return getObject(prependTransactionId(path));
+        } catch (NotFoundException ex) {
+            return createObject(prependTransactionId(path));
         }
     }
 
@@ -315,8 +325,110 @@ public class FedoraRepositoryImpl implements FedoraRepository {
     }
 
     @Override
+    public String startTransaction() throws FedoraException {
+        final HttpPost post = httpHelper.createPostMethod(FCR_TX, null);
+        try {
+
+            final HttpResponse response = httpHelper.execute(post);
+            final String uri = post.getURI().toString();
+            final StatusLine status = response.getStatusLine();
+            final int statusCode = status.getStatusCode();
+
+            if (statusCode == SC_CREATED) {
+                final String txId = response.getFirstHeader("Location").getValue().substring(repositoryURL.length());
+                TransactionIdHolder.setCurrentTransactionId(txId);
+                LOGGER.debug("Started transaction {}", txId);
+                return txId;
+            } else if (statusCode == SC_FORBIDDEN) {
+                LOGGER.error("request to start new transaction {} is not authorized.", uri);
+                throw new ForbiddenException("request to start new transaction " + uri + " is not authorized.");
+            } else {
+                LOGGER.error("error start new transaction {}: {} {}", uri, statusCode, status.getReasonPhrase());
+                throw new FedoraException("error start new transaction " + uri + ": " + statusCode + " " +
+                        status.getReasonPhrase());
+            }
+
+        } catch (final Exception e) {
+            LOGGER.error("could not encode URI parameter", e);
+            throw new FedoraException(e);
+        } finally {
+            post.releaseConnection();
+        }
+
+    }
+
+    @Override
+    public void commitTransaction() throws FedoraException {
+        final HttpPost post = httpHelper.createPostMethod(TransactionIdHolder.getCurrentTransactionId()
+                + FCR_TX + FCR_COMMIT, null);
+        try {
+            final HttpResponse response = httpHelper.execute(post);
+            final String uri = post.getURI().toString();
+            final StatusLine status = response.getStatusLine();
+            final int statusCode = status.getStatusCode();
+
+            if (statusCode == SC_FORBIDDEN) {
+                LOGGER.error("request to commit transaction {} is not authorized.", uri);
+                throw new ForbiddenException("request to commit transaction " + uri + " is not authorized.");
+            } else {
+                if (statusCode != SC_NO_CONTENT) {
+                    LOGGER.error("error committing back transaction {}: {} {}", uri,
+                            statusCode, status.getReasonPhrase());
+                    throw new FedoraException("error committing transaction " + uri + ": " + statusCode + " " +
+                            status.getReasonPhrase());
+                }
+            }
+            LOGGER.debug("Committed transaction {}", TransactionIdHolder.getCurrentTransactionId());
+        } catch (final Exception e) {
+            LOGGER.error("could not encode URI parameter", e);
+            throw new FedoraException(e);
+        } finally {
+            post.releaseConnection();
+            TransactionIdHolder.removeCurrentTransactionId();
+        }
+    }
+
+    @Override
+    public void rollbackTransaction() throws FedoraException {
+        final HttpPost post = httpHelper.createPostMethod(TransactionIdHolder.getCurrentTransactionId()
+                + FCR_TX + FCR_ROLLBACK, null);
+        try {
+            final HttpResponse response = httpHelper.execute(post);
+            final String uri = post.getURI().toString();
+            final StatusLine status = response.getStatusLine();
+            final int statusCode = status.getStatusCode();
+
+            if (statusCode == SC_FORBIDDEN) {
+                LOGGER.error("request to rollback transaction {} is not authorized.", uri);
+                throw new ForbiddenException("request to rollback transaction " + uri + " is not authorized.");
+            } else {
+                if (statusCode != SC_NO_CONTENT) {
+                    LOGGER.error("error rolling back transaction {}: {} {}", uri, statusCode, status.getReasonPhrase());
+                    throw new FedoraException("error rolling back transaction " + uri + ": " + statusCode + " " +
+                            status.getReasonPhrase());
+                }
+            }
+
+            LOGGER.debug("Rolled back transaction {}", TransactionIdHolder.getCurrentTransactionId());
+        } catch (final Exception e) {
+            LOGGER.error("could not encode URI parameter", e);
+            throw new FedoraException(e);
+        } finally {
+            post.releaseConnection();
+            TransactionIdHolder.removeCurrentTransactionId();
+        }
+    }
+
+    @Override
     public String getRepositoryUrl() {
         return repositoryURL;
     }
 
+    private String prependTransactionId(final String path) {
+        // append tx id to the path if there is a transaction present in txHolder,
+        // check if path needs to be prepended with a slash
+        final String txId = TransactionIdHolder.getCurrentTransactionId();
+        return (txId == null || path.contains(TX))
+                ? path : (path.startsWith("/") ? "/" + txId + path : txId + "/" + path);
+    }
 }
