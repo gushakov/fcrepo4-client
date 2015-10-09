@@ -49,7 +49,6 @@ import static org.slf4j.LoggerFactory.getLogger;
 /**
  * @author Mike Durbin
  * @author Hélder Silva
- * @author gushakov
  */
 public class FedoraRepositoryImplIT {
 
@@ -287,7 +286,7 @@ public class FedoraRepositoryImplIT {
     }
 
     @Test
-    public void testStartTransactionCreateResourceAndRollback() throws FedoraException {
+    public void testStartTransactionCreateObjectAndRollback() throws FedoraException {
         final String txId = repo.startTransaction();
         final String path = getRandomUniqueId();
         repo.createObject(path);
@@ -301,7 +300,7 @@ public class FedoraRepositoryImplIT {
     }
 
     @Test
-    public void testStartTransactionCreateResourceAndCommit() throws FedoraException {
+    public void testStartTransactionCreateObjectAndCommit() throws FedoraException {
         final String txId = repo.startTransaction();
         final String path = getRandomUniqueId();
         repo.createObject(path);
@@ -332,6 +331,27 @@ public class FedoraRepositoryImplIT {
         }
         threadPool.shutdown();
         threadPool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+    }
+
+    @Test
+    public void testStartTransactionCreateResourceWithNullContainerPathAndRollback() throws Exception {
+        repo.startTransaction();
+        repo.createResource(null);
+        repo.rollbackTransaction();
+    }
+
+    @Test
+    public void testStartTransactionCreateResourceWithNullContainerPathAndCommit() throws Exception {
+        repo.startTransaction();
+        repo.createResource(null);
+        repo.commitTransaction();
+    }
+
+    @Test
+    public void testStartTransactionCreateResourceWithEmptyContainerPathAndRollback() throws Exception {
+        repo.startTransaction();
+        repo.createResource("");
+        repo.rollbackTransaction();
     }
 
     private FedoraContent getStringTextContent(final String value) throws UnsupportedEncodingException {

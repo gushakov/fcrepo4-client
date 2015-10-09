@@ -32,7 +32,6 @@ import org.fcrepo.client.ForbiddenException;
 import org.fcrepo.client.NotFoundException;
 import org.fcrepo.client.ReadOnlyException;
 import org.fcrepo.client.utils.HttpHelper;
-import org.fcrepo.client.utils.TransactionIdHolder;
 import org.slf4j.Logger;
 
 import java.io.InputStream;
@@ -57,6 +56,8 @@ import static org.slf4j.LoggerFactory.getLogger;
  */
 public class FedoraRepositoryImpl implements FedoraRepository {
     private static final Logger LOGGER = getLogger(FedoraRepositoryImpl.class);
+
+    private static final ThreadLocal<String> TX_ID = new ThreadLocal<>();
 
     private static final String TX = "tx:";
     private static final String FCR_TX = "/fcr:tx";
@@ -83,8 +84,8 @@ public class FedoraRepositoryImpl implements FedoraRepository {
      * Constructor
      *
      * @param repositoryURL Repository base URL
-     * @param username      Repository username
-     * @param password      Repository password
+     * @param username Repository username
+     * @param password Repository password
      */
     public FedoraRepositoryImpl(final String repositoryURL, final String username, final String password) {
         this.repositoryURL = repositoryURL;
@@ -95,7 +96,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
      * Constructor that takes the pre-configured HttpClient
      *
      * @param repositoryURL Repository baseURL
-     * @param httpClient    Pre-configured httpClient
+     * @param httpClient Pre-configured httpClient
      */
     public FedoraRepositoryImpl(final String repositoryURL, final HttpClient httpClient) {
         this.repositoryURL = repositoryURL;
@@ -120,7 +121,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
             } else {
                 LOGGER.error("error checking resource {}: {} {}", uri, statusCode, status.getReasonPhrase());
                 throw new FedoraException("error checking resource " + uri + ": " + statusCode + " " +
-                        status.getReasonPhrase());
+                                          status.getReasonPhrase());
             }
         } catch (final Exception e) {
             LOGGER.error("could not encode URI parameter", e);
@@ -162,7 +163,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
             } else {
                 LOGGER.error("error creating resource {}: {} {}", uri, statusCode, status.getReasonPhrase());
                 throw new FedoraException("error retrieving resource " + uri + ": " + statusCode + " " +
-                        status.getReasonPhrase());
+                                                  status.getReasonPhrase());
             }
         } catch (final Exception e) {
             LOGGER.error("could not encode URI parameter", e);
@@ -221,7 +222,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
             } else {
                 LOGGER.error("error creating resource {}: {} {}", uri, statusCode, status.getReasonPhrase());
                 throw new FedoraException("error retrieving resource " + uri + ": " + statusCode + " " +
-                        status.getReasonPhrase());
+                                                  status.getReasonPhrase());
             }
         } catch (final Exception e) {
             LOGGER.error("could not encode URI parameter", e);
@@ -234,7 +235,8 @@ public class FedoraRepositoryImpl implements FedoraRepository {
     @Override
     public FedoraObject createResource(final String containerPath) throws FedoraException {
         final HttpPost post = httpHelper
-                .createPostMethod(containerPath == null ? "" : prependTransactionId(containerPath), null);
+                .createPostMethod(containerPath == null
+                        ? prependTransactionId("") : prependTransactionId(containerPath), null);
         try {
             final HttpResponse response = httpHelper.execute(post);
             final String uri = post.getURI().toString();
@@ -263,7 +265,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
     public FedoraDatastream findOrCreateDatastream(final String path) throws FedoraException {
         try {
             return getDatastream(prependTransactionId(path));
-        } catch (NotFoundException ex) {
+        } catch ( NotFoundException ex ) {
             return createDatastream(prependTransactionId(path), null);
         }
     }
@@ -272,7 +274,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
     public FedoraObject findOrCreateObject(final String path) throws FedoraException {
         try {
             return getObject(prependTransactionId(path));
-        } catch (NotFoundException ex) {
+        } catch ( NotFoundException ex ) {
             return createObject(prependTransactionId(path));
         }
     }
@@ -336,7 +338,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
 
             if (statusCode == SC_CREATED) {
                 final String txId = response.getFirstHeader("Location").getValue().substring(repositoryURL.length());
-                TransactionIdHolder.setCurrentTransactionId(txId);
+                TX_ID.set(txId);
                 LOGGER.debug("Started transaction {}", txId);
                 return txId;
             } else if (statusCode == SC_FORBIDDEN) {
@@ -359,7 +361,7 @@ public class FedoraRepositoryImpl implements FedoraRepository {
 
     @Override
     public void commitTransaction() throws FedoraException {
-        final HttpPost post = httpHelper.createPostMethod(TransactionIdHolder.getCurrentTransactionId()
+        final HttpPost post = httpHelper.createPostMethod(TX_ID.get()
                 + FCR_TX + FCR_COMMIT, null);
         try {
             final HttpResponse response = httpHelper.execute(post);
@@ -378,19 +380,19 @@ public class FedoraRepositoryImpl implements FedoraRepository {
                             status.getReasonPhrase());
                 }
             }
-            LOGGER.debug("Committed transaction {}", TransactionIdHolder.getCurrentTransactionId());
+            LOGGER.debug("Committed transaction {}", TX_ID.get());
         } catch (final Exception e) {
             LOGGER.error("could not encode URI parameter", e);
             throw new FedoraException(e);
         } finally {
             post.releaseConnection();
-            TransactionIdHolder.removeCurrentTransactionId();
+            TX_ID.remove();
         }
     }
 
     @Override
     public void rollbackTransaction() throws FedoraException {
-        final HttpPost post = httpHelper.createPostMethod(TransactionIdHolder.getCurrentTransactionId()
+        final HttpPost post = httpHelper.createPostMethod(TX_ID.get()
                 + FCR_TX + FCR_ROLLBACK, null);
         try {
             final HttpResponse response = httpHelper.execute(post);
@@ -409,13 +411,13 @@ public class FedoraRepositoryImpl implements FedoraRepository {
                 }
             }
 
-            LOGGER.debug("Rolled back transaction {}", TransactionIdHolder.getCurrentTransactionId());
+            LOGGER.debug("Rolled back transaction {}", TX_ID.get());
         } catch (final Exception e) {
             LOGGER.error("could not encode URI parameter", e);
             throw new FedoraException(e);
         } finally {
             post.releaseConnection();
-            TransactionIdHolder.removeCurrentTransactionId();
+            TX_ID.remove();
         }
     }
 
@@ -425,10 +427,17 @@ public class FedoraRepositoryImpl implements FedoraRepository {
     }
 
     private String prependTransactionId(final String path) {
-        // append tx id to the path if there is a transaction present in txHolder,
-        // check if path needs to be prepended with a slash
-        final String txId = TransactionIdHolder.getCurrentTransactionId();
-        return (txId == null || path.contains(TX))
-                ? path : (path.startsWith("/") ? "/" + txId + path : txId + "/" + path);
+        final String txId = TX_ID.get();
+        // append (if needed) tx id to the path if a transaction has been started for this thread
+        if (txId == null || path.contains(TX)) {
+            return path;
+        } else {
+            // respect the slash (if present) in the original path
+            if (path.startsWith("/")) {
+                return "/" + txId + path;
+            } else {
+                return txId + "/" + path;
+            }
+        }
     }
 }
